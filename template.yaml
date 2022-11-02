@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  # Amazon DynamoDb
+  watermarks:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: watermarks
+      PrimaryKey:
+        Name: id
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  
+  # Policies For Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        - PolicyName: allowLambdaLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - logs:*
+              Resource: arn:aws:logs:*:*:*
+        - PolicyName: allowSqs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - sqs:SendMessage
+              Resource: !GetAtt MySqsQueue.Arn
+        - PolicyName: allowDynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - dynamodb:*
+              Resource: !GetAtt watermarks.Arn
+        - PolicyName: allowS3
+          PolicyDocument:
+            Version: '2012-10-17' # Policy Document
+            Statement:
+            - Effect: Allow
+              Action:
+              - s3:GetObject
+              - s3:GetObjectACL
+              Resource: 'arn:aws:s3:::my-bucket/*'
+        
+  # Lambda Function        
+  Handler:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions
+      Handler: main.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs14.x
+      Events:
+        MyCloudWatchEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(3 minutes)
+  
+  # SQS
+  MySqsQueue:
+    Type: AWS::SQS::Queue  
+    Properties: 
+      QueueName: "SampleQueue"
+
+  # SQS Consumer
+  MySQSQueueHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions
+      Handler: main.workerHandler
+      Runtime: nodejs14.x
+      Policies:
+       - DynamoDBCrudPolicy:
+          TableName: !Ref watermarks       
+      AutoPublishAlias: live
+      ProvisionedConcurrencyConfig:
+        ProvisionedConcurrentExecutions: 10
+      Events:
+        MySQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MySqsQueue.Arn
+            BatchSize: 10 
